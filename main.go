@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/rossvz/bump/utils"
 )
@@ -13,6 +14,7 @@ type viewState int
 const (
 	selectSchemeView viewState = iota
 	selectSemverBumpView
+	editBranchNameView
 )
 
 type model struct {
@@ -24,53 +26,105 @@ type model struct {
 	bump        string
 	project     utils.ProjectType
 	versionFile string
+
+	branchInput textinput.Model
+	newVersion  string
 }
 
 func initialModel() model {
+	ti := textinput.New()
+	ti.Placeholder = "release/"
+	ti.Focus()
+	ti.CharLimit = 100
+	ti.Width = 50
+
 	return model{
-		state:   selectSchemeView,
-		choices: []string{"semver", "date-based"},
+		state:       selectSchemeView,
+		choices:     []string{"semver", "date-based"},
+		branchInput: ti,
 	}
 }
 
 func (m model) Init() tea.Cmd {
-	return nil
+	return textinput.Blink
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		if msg.String() == "ctrl+c" || msg.String() == "q" {
-			return m, tea.Quit
-		}
-
 		switch m.state {
-		case selectSchemeView, selectSemverBumpView:
-			switch msg.String() {
-			case "up", "k":
-				if m.cursor > 0 {
-					m.cursor--
-				}
-			case "down", "j":
-				if m.cursor < len(m.choices)-1 {
-					m.cursor++
-				}
-			case "enter", " ":
-				selectedChoice := m.choices[m.cursor]
-				if m.state == selectSchemeView {
-					m.scheme = selectedChoice
-					if m.scheme == "semver" {
-						m.state = selectSemverBumpView
-						m.choices = []string{"Major", "Minor", "Patch"}
-						m.cursor = 0
-						return m, nil
-					} else {
-						m.bump = "date"
-						return m, tea.Quit
+		case editBranchNameView:
+			switch msg.Type {
+			case tea.KeyEnter:
+				return m, tea.Quit
+			case tea.KeyCtrlC, tea.KeyEsc:
+				return m, tea.Quit
+			}
+			m.branchInput, cmd = m.branchInput.Update(msg)
+			return m, cmd
+		default:
+			if msg.String() == "ctrl+c" || msg.String() == "q" {
+				return m, tea.Quit
+			}
+
+			switch m.state {
+			case selectSchemeView, selectSemverBumpView:
+				switch msg.String() {
+				case "up", "k":
+					if m.cursor > 0 {
+						m.cursor--
 					}
-				} else {
-					m.bump = selectedChoice
-					return m, tea.Quit
+				case "down", "j":
+					if m.cursor < len(m.choices)-1 {
+						m.cursor++
+					}
+				case "enter", " ":
+					selectedChoice := m.choices[m.cursor]
+					if m.state == selectSchemeView {
+						m.scheme = selectedChoice
+						if m.scheme == "semver" {
+							m.state = selectSemverBumpView
+							m.choices = []string{"Major", "Minor", "Patch"}
+							m.cursor = 0
+							return m, nil
+						} else {
+							m.bump = "date"
+							// Calculate version before branch name edit
+							project, versionFile := utils.DetectProject()
+							if project == utils.UnknownProject {
+								fmt.Println("Error: Could not detect project type")
+								return m, tea.Quit
+							}
+							newVersion, _, err := utils.CalculateNewVersion(project, versionFile, "date")
+							if err != nil {
+								fmt.Printf("Error calculating version: %v\n", err)
+								return m, tea.Quit
+							}
+							m.newVersion = newVersion
+							m.branchInput.SetValue(fmt.Sprintf("release/%s", newVersion))
+							m.state = editBranchNameView
+							return m, nil
+						}
+					} else if m.state == selectSemverBumpView {
+						m.bump = selectedChoice
+						// Calculate version before branch name edit
+						project, versionFile := utils.DetectProject()
+						if project == utils.UnknownProject {
+							fmt.Println("Error: Could not detect project type")
+							return m, tea.Quit
+						}
+						newVersion, _, err := utils.CalculateNewVersion(project, versionFile, selectedChoice)
+						if err != nil {
+							fmt.Printf("Error calculating version: %v\n", err)
+							return m, tea.Quit
+						}
+						m.newVersion = newVersion
+						m.branchInput.SetValue(fmt.Sprintf("release/%s", newVersion))
+						m.state = editBranchNameView
+						return m, nil
+					}
 				}
 			}
 		}
@@ -100,6 +154,9 @@ func (m model) View() string {
 			}
 			s += fmt.Sprintf("%s %s\n", cursor, choice)
 		}
+	case editBranchNameView:
+		s = fmt.Sprintf("Enter branch name (version will be %s):\n\n", m.newVersion)
+		s += m.branchInput.View()
 	}
 	s += "\nPress Ctrl+C or q to quit early.\n"
 	return s
@@ -169,10 +226,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 5. Create new branch
-	releaseBranch := fmt.Sprintf("release/%s", newVersion)
-	fmt.Printf("Creating branch: %s\n", releaseBranch)
-	if err := utils.CreateBranch(releaseBranch); err != nil {
+	// 5. Create new branch using the custom branch name
+	branchName := finalModel.branchInput.Value()
+	if branchName == "" {
+		branchName = fmt.Sprintf("release/%s", newVersion)
+	}
+	fmt.Printf("Creating branch: %s\n", branchName)
+	if err := utils.CreateBranch(branchName); err != nil {
 		fmt.Printf("Error creating branch: %v\n", err)
 		if switchErr := utils.CheckoutBranch(originalBranch); switchErr != nil {
 			fmt.Printf("Warning: Failed to switch back to original branch '%s': %v\n", originalBranch, switchErr)
@@ -211,5 +271,5 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Printf("Successfully created branch '%s', committed version bump. You are now on branch '%s'.\n", releaseBranch, releaseBranch)
+	fmt.Printf("Successfully created branch '%s', committed version bump. You are now on branch '%s'.\n", branchName, branchName)
 }

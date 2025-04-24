@@ -46,7 +46,7 @@ func CalculateNewVersion(project ProjectType, filePath, bumpType string) (newVer
 
 	switch project {
 	case ElixirProject:
-		versionPattern = regexp.MustCompile(`version:\s*"([^"]+)"`)
+		versionPattern = regexp.MustCompile(`(?:version:|@version)\s*"([^"]+)"`)
 	case NodeProject:
 		versionPattern = regexp.MustCompile(`"version"\s*:\s*"([^"]+)"`)
 	default:
@@ -96,8 +96,13 @@ func WriteVersion(project ProjectType, filePath, currentVersionStr, newVersionSt
 
 	switch project {
 	case ElixirProject:
-		oldVersionLine = fmt.Sprintf(`version: "%s"`, currentVersionStr)
-		newVersionLine = fmt.Sprintf(`version: "%s"`, newVersionStr)
+		if strings.Contains(contentStr, "@version") {
+			oldVersionLine = fmt.Sprintf(`@version "%s"`, currentVersionStr)
+			newVersionLine = fmt.Sprintf(`@version "%s"`, newVersionStr)
+		} else {
+			oldVersionLine = fmt.Sprintf(`version: "%s"`, currentVersionStr)
+			newVersionLine = fmt.Sprintf(`version: "%s"`, newVersionStr)
+		}
 	case NodeProject:
 		oldVersionLine = fmt.Sprintf(`"version": "%s"`, currentVersionStr)
 		newVersionLine = fmt.Sprintf(`"version": "%s"`, newVersionStr)
