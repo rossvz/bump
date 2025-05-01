@@ -92,12 +92,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						} else {
 							m.bump = "date"
 							// Calculate version before branch name edit
-							project, versionFile := utils.DetectProject()
-							if project == utils.UnknownProject {
-								fmt.Println("Error: Could not detect project type")
-								return m, tea.Quit
+							if m.project == utils.UnknownProject {
+								fmt.Println("Warning: Could not detect project type. Version bumping might not work correctly.")
+							} else {
+								currentVersion, err := utils.GetCurrentVersion(m.project, m.versionFile)
+								if err != nil {
+									fmt.Printf("Error getting current version from %s: %v\n", m.versionFile, err)
+								} else {
+									fmt.Printf("Current version: %s\n", currentVersion)
+								}
 							}
-							newVersion, _, err := utils.CalculateNewVersion(project, versionFile, "date")
+							newVersion, _, err := utils.CalculateNewVersion(m.project, m.versionFile, "date")
 							if err != nil {
 								fmt.Printf("Error calculating version: %v\n", err)
 								return m, tea.Quit
@@ -110,12 +115,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					} else if m.state == selectSemverBumpView {
 						m.bump = selectedChoice
 						// Calculate version before branch name edit
-						project, versionFile := utils.DetectProject()
-						if project == utils.UnknownProject {
-							fmt.Println("Error: Could not detect project type")
+						if m.project == utils.UnknownProject {
+							fmt.Println("Error: Cannot calculate version - unknown project type.")
 							return m, tea.Quit
 						}
-						newVersion, _, err := utils.CalculateNewVersion(project, versionFile, selectedChoice)
+						newVersion, _, err := utils.CalculateNewVersion(m.project, m.versionFile, selectedChoice)
 						if err != nil {
 							fmt.Printf("Error calculating version: %v\n", err)
 							return m, tea.Quit
@@ -182,8 +186,32 @@ func main() {
 	}
 	fmt.Printf("Current branch: %s\n", originalBranch)
 
-	// 3. Run the TUI to get user input
+	// 3. Detect project type and get current version
+	project, versionFile := utils.DetectProject()
+	if project == utils.UnknownProject {
+		// If unknown, maybe default to git tag or inform user?
+		// For now, we'll proceed, but version calculation might fail later
+		fmt.Println("Warning: Could not detect project type. Version bumping might not work correctly.")
+	} else {
+		currentVersion, err := utils.GetCurrentVersion(project, versionFile)
+		if err != nil {
+			fmt.Printf("Error getting current version from %s: %v\n", versionFile, err)
+			// Decide if we should exit or proceed without version info
+			// os.Exit(1)
+		} else {
+			fmt.Printf("Current version: %s\n", currentVersion)
+		}
+		// Store project info in the initial model if needed later, or pass it
+		// initial.project = project
+		// initial.versionFile = versionFile
+	}
+
+	// 4. Run the TUI to get user input
 	initial := initialModel()
+	// Pass project info if needed, e.g.:
+	initial.project = project
+	initial.versionFile = versionFile
+
 	p := tea.NewProgram(initial)
 	finalModelInterface, err := p.Run()
 	if err != nil {
@@ -202,34 +230,10 @@ func main() {
 		os.Exit(0)
 	}
 
-	// 4. Detect project and calculate new version (after TUI)
-	project, versionFile := utils.DetectProject()
-	if project == utils.UnknownProject {
-		fmt.Println("Error: Could not detect project type (mix.exs or package.json not found).")
-		if switchErr := utils.CheckoutBranch(originalBranch); switchErr != nil {
-			fmt.Printf("Warning: Failed to switch back to original branch '%s': %v\n", originalBranch, switchErr)
-		}
-		os.Exit(1)
-	}
-
-	bumpType := finalModel.bump
-	if finalModel.scheme == "date-based" {
-		bumpType = "date"
-	}
-
-	newVersion, currentVersion, err := utils.CalculateNewVersion(project, versionFile, bumpType)
-	if err != nil {
-		fmt.Printf("Error calculating new version: %v\n", err)
-		if switchErr := utils.CheckoutBranch(originalBranch); switchErr != nil {
-			fmt.Printf("Warning: Failed to switch back to original branch '%s': %v\n", originalBranch, switchErr)
-		}
-		os.Exit(1)
-	}
-
 	// 5. Create new branch using the custom branch name
 	branchName := finalModel.branchInput.Value()
 	if branchName == "" {
-		branchName = fmt.Sprintf("release/%s", newVersion)
+		branchName = fmt.Sprintf("release/%s", finalModel.newVersion)
 	}
 	fmt.Printf("Creating branch: %s\n", branchName)
 	if err := utils.CreateBranch(branchName); err != nil {
@@ -241,8 +245,19 @@ func main() {
 	}
 
 	// 6. Write version update
-	fmt.Printf("Updating %s from %s to %s\n", versionFile, currentVersion, newVersion)
-	if err := utils.WriteVersion(project, versionFile, currentVersion, newVersion); err != nil {
+	// Fetch current version again right before writing
+	currentVersion, err := utils.GetCurrentVersion(finalModel.project, finalModel.versionFile)
+	if err != nil {
+		fmt.Printf("Error re-fetching current version for write: %v\n", err)
+		// Handle error, maybe switch back and exit
+		if switchErr := utils.CheckoutBranch(originalBranch); switchErr != nil {
+			fmt.Printf("Warning: Failed to switch back to original branch '%s': %v\n", originalBranch, switchErr)
+		}
+		os.Exit(1)
+	}
+
+	fmt.Printf("Updating %s from %s to %s\n", finalModel.versionFile, currentVersion, finalModel.newVersion)
+	if err := utils.WriteVersion(finalModel.project, finalModel.versionFile, currentVersion, finalModel.newVersion); err != nil {
 		fmt.Printf("Error writing version update: %v\n", err)
 		if switchErr := utils.CheckoutBranch(originalBranch); switchErr != nil {
 			fmt.Printf("Warning: Failed to switch back to original branch '%s': %v\n", originalBranch, switchErr)
@@ -251,8 +266,8 @@ func main() {
 	}
 
 	// 7. Stage changes
-	fmt.Printf("Staging %s\n", versionFile)
-	if err := utils.StageFile(versionFile); err != nil {
+	fmt.Printf("Staging %s\n", finalModel.versionFile)
+	if err := utils.StageFile(finalModel.versionFile); err != nil {
 		fmt.Printf("Error staging file: %v\n", err)
 		if switchErr := utils.CheckoutBranch(originalBranch); switchErr != nil {
 			fmt.Printf("Warning: Failed to switch back to original branch '%s': %v\n", originalBranch, switchErr)
@@ -261,7 +276,7 @@ func main() {
 	}
 
 	// 8. Commit changes
-	commitMessage := fmt.Sprintf("version bump %s", newVersion)
+	commitMessage := fmt.Sprintf("version bump %s", finalModel.newVersion)
 	fmt.Printf("Committing: %s\n", commitMessage)
 	if err := utils.CommitChanges(commitMessage); err != nil {
 		fmt.Printf("Error committing changes: %v\n", err)

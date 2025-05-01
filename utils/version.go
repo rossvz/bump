@@ -33,12 +33,12 @@ func DetectProject() (ProjectType, string) {
 	return UnknownProject, ""
 }
 
-// CalculateNewVersion determines the new version string without modifying the file.
+// GetCurrentVersion reads the current version string from the project file.
 // Exported function.
-func CalculateNewVersion(project ProjectType, filePath, bumpType string) (newVersionStr, currentVersionStr string, err error) {
+func GetCurrentVersion(project ProjectType, filePath string) (string, error) {
 	content, err := os.ReadFile(filePath)
 	if err != nil {
-		return "", "", fmt.Errorf("failed to read %s: %w", filePath, err)
+		return "", fmt.Errorf("failed to read %s: %w", filePath, err)
 	}
 	contentStr := string(content)
 
@@ -50,14 +50,23 @@ func CalculateNewVersion(project ProjectType, filePath, bumpType string) (newVer
 	case NodeProject:
 		versionPattern = regexp.MustCompile(`"version"\s*:\s*"([^"]+)"`)
 	default:
-		return "", "", fmt.Errorf("unsupported project type for calculation")
+		return "", fmt.Errorf("unsupported project type for getting version")
 	}
 
 	matches := versionPattern.FindStringSubmatch(contentStr)
 	if len(matches) < 2 {
-		return "", "", fmt.Errorf("could not find version string pattern in %s", filePath)
+		return "", fmt.Errorf("could not find version string pattern in %s", filePath)
 	}
-	currentVersionStr = matches[1]
+	currentVersionStr := matches[1]
+	return currentVersionStr, nil
+}
+
+// CalculateNewVersion determines the new version string based on the current version.
+func CalculateNewVersion(project ProjectType, filePath, bumpType string) (newVersionStr, currentVersionStr string, err error) {
+	currentVersionStr, err = GetCurrentVersion(project, filePath)
+	if err != nil {
+		return "", "", err // Propagate error from GetCurrentVersion
+	}
 
 	if bumpType == "date" {
 		newVersionStr = time.Now().UTC().Format("2006.1.2-150405")
