@@ -1,0 +1,33 @@
+name: Release Bump CLI
+
+on:
+  push:
+    tags:
+      - 'v*.*.*' # Trigger on version tags like v1.0.0
+
+permissions:
+  contents: write # Needed to create releases
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Need full history for changelog generation
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24' # Use the Go version from go.mod
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          # Optional: set the version of goreleaser to use, defaults to latest
+          # version: latest
+          args: release --clean
+        env:
+          # GITHUB_TOKEN is required for goreleaser to interact with GitHub
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} 

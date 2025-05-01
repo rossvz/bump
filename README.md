@@ -2,6 +2,15 @@
 
 a tiny utility to make it easier to cut a release branch and bump the version number in Elixir and JS repos.
 
+## Installation
+
+Pre-compiled binaries for Linux, macOS (Darwin), and Windows are available on the [GitHub Releases page](https://github.com/rossvz/bump/releases). Download the appropriate archive for your system, extract the `bump` binary, and place it somewhere in your PATH.
+
+Alternatively, if you have Go installed, you can build from source:
+
+```bash
+go install github.com/rossvz/bump@latest
+```
 
 ## Usage
 
